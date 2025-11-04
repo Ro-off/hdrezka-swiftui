@@ -5,7 +5,8 @@ import FirebaseAnalytics
 import SwiftData
 import SwiftUI
 
-struct WatchSheetView: View {
+struct DownloadSheetView: View {
+    @Injected(\.saveWatchingStateUseCase) private var saveWatchingStateUseCase
     @Injected(\.getMovieDetailsUseCase) private var getMovieDetailsUseCase
     @Injected(\.getMovieVideoUseCase) private var getMovieVideoUseCase
     @Injected(\.getSeriesSeasonsUseCase) private var getSeriesSeasonsUseCase
@@ -13,9 +14,11 @@ struct WatchSheetView: View {
     @State private var subscriptions: Set<AnyCancellable> = []
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @Environment(\.modelContext) private var modelContext
 
     @Environment(AppState.self) private var appState
+    @Environment(Downloader.self) private var downloader
 
     @Query private var selectPositions: [SelectPosition]
 
@@ -24,7 +27,6 @@ struct WatchSheetView: View {
     @Default(.defaultQuality) private var defaultQuality
 
     private let id: String
-    @Binding private var playerData: PlayerData?
 
     @State private var details: MovieDetailed?
     @State private var seasons: [MovieSeason]?
@@ -41,22 +43,21 @@ struct WatchSheetView: View {
 
     @State private var showRating: Bool = false
 
-    init(id: String, playerData: Binding<PlayerData?>) {
+    init(id: String) {
         self.id = id
-        _playerData = playerData
     }
 
     var body: some View {
         VStack(alignment: .center, spacing: 25) {
             VStack(alignment: .center, spacing: 5) {
-                Image(systemName: "videoprojector")
+                Image(systemName: "arrow.down.circle")
                     .font(.largeTitle)
                     .foregroundStyle(Color.accentColor)
 
                 Text("key.before_starting")
                     .font(.largeTitle.weight(.semibold))
 
-                Text("key.watch.description")
+                Text("key.download.description")
                     .font(.title3)
                     .lineLimit(2, reservesSpace: true)
                     .multilineTextAlignment(.center)
@@ -351,22 +352,75 @@ struct WatchSheetView: View {
 
             VStack(alignment: .center, spacing: 10) {
                 Button {
-                    if let details, let selectedActing, let selectedQuality, let movie {
-                        dismiss()
-
-                        playerData = PlayerData(details: details, selectedActing: selectedActing, seasons: seasons, selectedSeason: selectedSeason, selectedEpisode: selectedEpisode, selectedQuality: selectedQuality, movie: movie)
+                    if let details, let selectedActing, let selectedQuality {
+                        downloader.download(.init(details: details, acting: selectedActing, season: selectedSeason, episode: selectedEpisode, quality: selectedQuality))
                     }
                 } label: {
-                    Text("key.watch")
+                    Text("key.download")
                         .frame(width: 250, height: 30)
                         .foregroundStyle(.white)
                         .contentShape(.rect(cornerRadius: 6))
                         .background(selectedQuality != nil ? Color.accentColor : Color.secondary, in: .rect(cornerRadius: 6))
                 }
                 .buttonStyle(.plain)
-                .disabled(selectedQuality == nil)
+                .disabled(selectedQuality == nil
+                    || downloader.downloads.contains(where: {
+                        $0.data.notificationId == "\(details?.movieId ?? "")\(selectedSeason?.seasonId ?? "")\(selectedEpisode?.episodeId ?? "")\(selectedActing?.translatorId ?? "")\(selectedQuality ?? "")".base64Encoded || $0.data.notificationId == "\(details?.movieId ?? "")\(selectedSeason?.seasonId ?? "")\(selectedActing?.translatorId ?? "")\(selectedQuality ?? "")".base64Encoded
+                    }))
+
+                if let details, details.series != nil {
+                    Button {
+                        if let selectedActing, let selectedQuality, let selectedSeason {
+                            downloader.download(.init(details: details, acting: selectedActing, season: selectedSeason, episode: selectedEpisode, quality: selectedQuality, all: true))
+                        }
+                    } label: {
+                        Text("key.download.season")
+                            .frame(width: 250, height: 30)
+                            .foregroundStyle(.white)
+                            .contentShape(.rect(cornerRadius: 6))
+                            .background(selectedQuality != nil ? Color.accentColor : Color.secondary, in: .rect(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectedQuality == nil
+                        || downloader.downloads.contains(where: {
+                            $0.data.notificationId == "\(details.movieId)\(selectedSeason?.seasonId ?? "")\(selectedActing?.translatorId ?? "")\(selectedQuality ?? "")".base64Encoded
+                        }))
+                }
+            }
+
+            if downloader.downloads.contains(where: { $0.data.details.movieId == id }) {
+                List {
+                    ForEach(downloader.downloads.filter { $0.data.details.movieId == id }) { download in
+                        ProgressView(download.progress)
+                            .contextMenu {
+                                Button {
+                                    withAnimation(.easeInOut) {
+                                        download.cancel()
+                                        downloader.downloads.removeAll(where: { $0.id == download.id })
+                                    }
+                                } label: {
+                                    Text("key.cancel")
+                                }
+                            }
+                    }
+                    .onDelete { offsets in
+                        for offset in offsets {
+                            withAnimation(.easeInOut) {
+                                downloader.downloads[offset].cancel()
+                                downloader.downloads.remove(at: offset)
+                            }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 150, maxHeight: 250)
             }
         }
+        .padding(.horizontal, 35)
+        .padding(.top, 35)
+        .padding(.bottom, 25)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 520)
         .alert("key.ops", isPresented: $isErrorPresented) {
             if let hdrezkaError = error as? HDrezkaError, case .loginRequired = hdrezkaError {
                 Button(role: .destructive) {
@@ -399,11 +453,6 @@ struct WatchSheetView: View {
         } message: {
             Text("key.sign_in.access")
         }
-        .padding(.horizontal, 35)
-        .padding(.top, 35)
-        .padding(.bottom, 25)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(width: 520)
         .onAppear {
             getMovieDetailsUseCase(movieId: id)
                 .receive(on: DispatchQueue.main)
@@ -586,7 +635,7 @@ struct WatchSheetView: View {
                     .store(in: &subscriptions)
             }
         }
-        .analyticsScreen(name: "watch_sheet", class: "WatchSheetView", extraParameters: ["id": id])
+        .analyticsScreen(name: "download_sheet", class: "DownloadSheetView", extraParameters: ["id": id])
     }
 
     private struct CustomLabelStyle: LabelStyle {
