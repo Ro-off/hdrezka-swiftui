@@ -19,7 +19,7 @@ struct SnowflakesView: View {
             .onGeometryChange(for: CGSize.self) { geometry in
                 geometry.size
             } action: { size in
-                let targetCount = Int((size.width * size.height) / 15000)
+                let targetCount = Int((size.width * size.height) / 20000)
 
                 guard targetCount != snowflakes.count else { return }
 
