@@ -42,50 +42,60 @@ struct PlayerView: View {
                 .padding(.vertical, 18)
                 .padding(.horizontal, 36)
             } else if let player = viewModel.playerLayer.player {
-                CustomAVPlayerView(playerLayer: viewModel.playerLayer)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(.rect)
-                    .gesture(
-                        TapGesture(count: 2)
-                            .onEnded {
-                                guard player.status == .readyToPlay,
-                                      let window = viewModel.window,
-                                      !viewModel.isPictureInPictureActive || (viewModel.isPictureInPictureActive && window.styleMask.contains(.fullScreen))
-                                else {
-                                    return
-                                }
+                ZStack {
+                    if viewModel.shouldShowAmbientBackground {
+                        AmbientBackgroundPlayerView(player: player)
+                            .blur(radius: 55)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
 
-                                window.toggleFullScreen(nil)
+                    CustomAVPlayerView(playerLayer: viewModel.playerLayer)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(.rect)
+                .gesture(
+                    TapGesture(count: 2)
+                        .onEnded {
+                            guard player.status == .readyToPlay,
+                                  let window = viewModel.window,
+                                  !viewModel.isPictureInPictureActive || (viewModel.isPictureInPictureActive && window.styleMask.contains(.fullScreen))
+                            else {
+                                return
                             }
-                            .exclusively(before:
-                                TapGesture(count: 1)
-                                    .onEnded {
-                                        guard player.status == .readyToPlay,
-                                              !viewModel.isPictureInPictureActive,
-                                              !viewModel.isLoading
-                                        else {
-                                            return
-                                        }
 
-                                        if viewModel.isPlaying {
-                                            player.pause()
-                                        } else {
-                                            player.playImmediately(atRate: viewModel.rate)
-                                        }
-                                    }),
-                    )
-                    .overlay(alignment: .top) {
-                        TopControlsView(player: player)
-                    }
-                    .overlay(alignment: .center) {
-                        MiddleControlsView(player: player)
-                    }
-                    .overlay(alignment: .bottom) {
-                        BottomControlsView(player: player)
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        NextTimerView()
-                    }
+                            window.toggleFullScreen(nil)
+                        }
+                        .exclusively(before:
+                            TapGesture(count: 1)
+                                .onEnded {
+                                    guard player.status == .readyToPlay,
+                                          !viewModel.isPictureInPictureActive,
+                                          !viewModel.isLoading
+                                    else {
+                                        return
+                                    }
+
+                                    if viewModel.isPlaying {
+                                        player.pause()
+                                    } else {
+                                        player.playImmediately(atRate: viewModel.rate)
+                                    }
+                                }),
+                )
+                .overlay(alignment: .top) {
+                    TopControlsView(player: player)
+                }
+                .overlay(alignment: .center) {
+                    MiddleControlsView(player: player)
+                }
+                .overlay(alignment: .bottom) {
+                    BottomControlsView(player: player)
+                }
+                .overlay(alignment: .topTrailing) {
+                    NextTimerView()
+                }
             } else if viewModel.isLoading {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

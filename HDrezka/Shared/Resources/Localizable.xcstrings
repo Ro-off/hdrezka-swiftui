@@ -7725,6 +7725,28 @@
         }
       }
     },
+    "key.video_gravity.fit_ambient" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit with ambient"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вместить с фоном"
+          }
+        },
+        "uk" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Вмістити з фоном"
+          }
+        }
+      }
+    },
     "key.video_gravity.stretch" : {
       "localizations" : {
         "en" : {

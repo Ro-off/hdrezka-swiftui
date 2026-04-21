@@ -9,6 +9,22 @@ import SwiftUI
 
 @Observable
 class PlayerViewModel {
+    private static let fitVideoGravityMode = "fit"
+    private static let fitAmbientVideoGravityMode = "fit_ambient"
+    private static let fillVideoGravityMode = "fill"
+    private static let stretchVideoGravityMode = "stretch"
+
+    private static func layerVideoGravity(for mode: String) -> AVLayerVideoGravity {
+        switch mode {
+        case fillVideoGravityMode:
+            .resizeAspectFill
+        case stretchVideoGravityMode:
+            .resize
+        default:
+            .resizeAspect
+        }
+    }
+
     @ObservationIgnored @LazyInjected(\.saveWatchingStateUseCase) private var saveWatchingStateUseCase
     @ObservationIgnored @LazyInjected(\.getMovieThumbnailsUseCase) private var getMovieThumbnailsUseCase
     @ObservationIgnored @LazyInjected(\.getMovieVideoUseCase) private var getMovieVideoUseCase
@@ -78,7 +94,15 @@ class PlayerViewModel {
     var pipController: AVPictureInPictureController?
     var isPictureInPictureActive: Bool = false
     var isPictureInPicturePossible: Bool = false
-    var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var videoGravityMode: String = fitVideoGravityMode {
+        didSet {
+            let gravity = Self.layerVideoGravity(for: videoGravityMode)
+            videoGravity = gravity
+            playerLayer.videoGravity = gravity
+        }
+    }
+
+    var videoGravity: AVLayerVideoGravity = layerVideoGravity(for: fitVideoGravityMode)
     var loadedTimeRanges: [CMTimeRange] = []
     var timeObserverToken: Any?
     var timer: Int?
@@ -103,6 +127,10 @@ class PlayerViewModel {
     var playerFullscreen: Bool = Defaults[.playerFullscreen]
     var isFocused = false
     var dismiss: DismissAction?
+
+    var shouldShowAmbientBackground: Bool {
+        videoGravityMode == Self.fitAmbientVideoGravityMode
+    }
 
     func setupPlayer(seek: CMTime? = nil, isPlaying playing: Bool = true, subtitles: String? = nil) {
         guard let urls = movie.getClosestTo(quality: quality)?.compactMap(\.hls), !urls.isEmpty else { return }

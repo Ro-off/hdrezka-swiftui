@@ -105,15 +105,17 @@ struct BottomControlsView: View {
                         .pickerStyle(.menu)
 
                         Picker("key.video_gravity", selection: Binding {
-                            viewModel.videoGravity
+                            viewModel.videoGravityMode
                         } set: {
-                            viewModel.playerLayer.videoGravity = $0
+                            viewModel.videoGravityMode = $0
                         }) {
-                            Text("key.video_gravity.fit").tag(AVLayerVideoGravity.resizeAspect)
+                            Text("key.video_gravity.fit").tag("fit")
 
-                            Text("key.video_gravity.fill").tag(AVLayerVideoGravity.resizeAspectFill)
+                            Text("key.video_gravity.fit_ambient").tag("fit_ambient")
 
-                            Text("key.video_gravity.stretch").tag(AVLayerVideoGravity.resize)
+                            Text("key.video_gravity.fill").tag("fill")
+
+                            Text("key.video_gravity.stretch").tag("stretch")
                         }
                         .pickerStyle(.menu)
 

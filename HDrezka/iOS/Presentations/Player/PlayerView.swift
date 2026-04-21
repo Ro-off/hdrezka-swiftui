@@ -8,6 +8,22 @@ import SwiftData
 import SwiftUI
 
 struct PlayerView: View {
+    private static let fitVideoGravityMode = "fit"
+    private static let fitAmbientVideoGravityMode = "fit_ambient"
+    private static let fillVideoGravityMode = "fill"
+    private static let stretchVideoGravityMode = "stretch"
+
+    private static func layerVideoGravity(for mode: String) -> AVLayerVideoGravity {
+        switch mode {
+        case fillVideoGravityMode:
+            .resizeAspectFill
+        case stretchVideoGravityMode:
+            .resize
+        default:
+            .resizeAspect
+        }
+    }
+
     @Injected(\.saveWatchingStateUseCase) private var saveWatchingStateUseCase
     @Injected(\.getMovieThumbnailsUseCase) private var getMovieThumbnailsUseCase
     @Injected(\.getMovieVideoUseCase) private var getMovieVideoUseCase
@@ -50,7 +66,7 @@ struct PlayerView: View {
     @State private var pipController: AVPictureInPictureController?
     @State private var isPictureInPictureActive: Bool = false
     @State private var isPictureInPicturePossible: Bool = false
-    @State private var videoGravity: AVLayerVideoGravity = .resizeAspect
+    @State private var videoGravityMode: String = Self.fitVideoGravityMode
     @State private var loadedTimeRanges: [CMTimeRange] = []
     @State private var timeObserverToken: Any?
     private let rates: [Float] = [0.5, 1.0, 1.25, 1.5, 2.0]
@@ -99,357 +115,265 @@ struct PlayerView: View {
                 .padding(36)
             } else if let player {
                 GeometryReader { geometry in
-                    CustomVideoPlayer(player: player, playerLayer: $playerLayer)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .contentShape(.rect)
-                        .task(id: playerLayer) {
-                            if let playerLayer {
-                                layerSubscriptions.flush()
+                    ZStack {
+                        if videoGravityMode == Self.fitAmbientVideoGravityMode {
+                            AmbientVideoPlayer(player: player)
+                                .frame(width: geometry.size.width, height: geometry.size.height)
+                                .blur(radius: 44)
+                                .scaleEffect(1.12)
+                                .overlay(Color.black.opacity(0.42))
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
 
-                                playerLayer.videoGravity = videoGravity
+                        CustomVideoPlayer(player: player, playerLayer: $playerLayer)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                    .contentShape(.rect)
+                    .task(id: playerLayer) {
+                        if let playerLayer {
+                            layerSubscriptions.flush()
 
-                                playerLayer.publisher(for: \.videoGravity)
+                            playerLayer.videoGravity = Self.layerVideoGravity(for: videoGravityMode)
+
+                            let pipController = AVPictureInPictureController(playerLayer: playerLayer)
+
+                            if let pipController {
+                                pipController.publisher(for: \.isPictureInPictureActive)
                                     .receive(on: DispatchQueue.main)
-                                    .sink { videoGravity in
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            self.videoGravity = videoGravity
+                                    .sink { isPictureInPictureActive in
+                                        withAnimation(.easeInOut) {
+                                            self.isPictureInPictureActive = isPictureInPictureActive
                                         }
+
+                                        setMask(!isPictureInPictureActive)
+
+                                        updateNextTimer()
                                     }
                                     .store(in: &layerSubscriptions)
 
-                                let pipController = AVPictureInPictureController(playerLayer: playerLayer)
-
-                                if let pipController {
-                                    pipController.publisher(for: \.isPictureInPictureActive)
-                                        .receive(on: DispatchQueue.main)
-                                        .sink { isPictureInPictureActive in
-                                            withAnimation(.easeInOut) {
-                                                self.isPictureInPictureActive = isPictureInPictureActive
-                                            }
-
-                                            setMask(!isPictureInPictureActive)
-
-                                            updateNextTimer()
+                                pipController.publisher(for: \.isPictureInPicturePossible)
+                                    .receive(on: DispatchQueue.main)
+                                    .sink { isPictureInPicturePossible in
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            self.isPictureInPicturePossible = isPictureInPicturePossible
                                         }
-                                        .store(in: &layerSubscriptions)
+                                    }
+                                    .store(in: &layerSubscriptions)
+                            }
 
-                                    pipController.publisher(for: \.isPictureInPicturePossible)
-                                        .receive(on: DispatchQueue.main)
-                                        .sink { isPictureInPicturePossible in
-                                            withAnimation(.easeInOut(duration: 0.15)) {
-                                                self.isPictureInPicturePossible = isPictureInPicturePossible
-                                            }
-                                        }
-                                        .store(in: &layerSubscriptions)
-                                }
-
-                                withAnimation(.easeInOut) {
-                                    self.pipController = pipController
-                                }
+                            withAnimation(.easeInOut) {
+                                self.pipController = pipController
                             }
                         }
-                        .gesture(
-                            SpatialTapGesture(count: 2)
-                                .onEnded { event in
-                                    guard player.status == .readyToPlay,
-                                          !isPictureInPictureActive
-                                    else {
-                                        return
-                                    }
-
-                                    if event.location.x / geometry.size.width > 0.5 {
-                                        player.seek(to: CMTime(seconds: min(currentTime + 10.0, duration), preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { complete in
-                                            if isPlaying, complete {
-                                                player.playImmediately(atRate: rate)
-                                            }
-                                        }
-
-                                        currentTime = min(currentTime + 10.0, duration)
-                                    } else {
-                                        player.seek(to: CMTime(seconds: max(currentTime - 10.0, 0.0), preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { complete in
-                                            if isPlaying, complete {
-                                                player.playImmediately(atRate: rate)
-                                            }
-                                        }
-
-                                        currentTime = max(currentTime - 10.0, 0.0)
-                                    }
-                                }
-                                .exclusively(before:
-                                    TapGesture(count: 1)
-                                        .onEnded {
-                                            if !isMaskShow {
-                                                setMask(!isPictureInPictureActive)
-                                            } else {
-                                                setMask((isLoading || !isPlaying) && !isPictureInPictureActive)
-                                            }
-                                        }
-                                        .exclusively(before:
-                                            DragGesture(minimumDistance: 0)
-                                                .onChanged { drag in
-                                                    if drag.startLocation.x > geometry.size.width / 2 {
-                                                        let delta = -drag.translation.height / (geometry.size.height / 2)
-
-                                                        player.volume = min(max(initialVolume + Float(delta), 0), 1)
-                                                    }
-                                                }
-                                                .onEnded { drag in
-                                                    if drag.startLocation.x > geometry.size.width / 2 {
-                                                        initialVolume = player.volume
-                                                    }
-                                                })),
-                        )
-                        .overlay(alignment: .topTrailing) {
-                            HStack(alignment: .center) {
-                                SliderWithoutTextView(value: Binding {
-                                    volume
-                                } set: { volume in
-                                    player.volume = volume
-                                }, inRange: 0 ... 1, activeFillColor: .primary, fillColor: .primary.opacity(0.7), emptyColor: .primary.opacity(0.3), height: 8)
-                                    .frame(width: 120, height: 10)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-
-                                VStack(alignment: .center) {
-                                    Button {
-                                        resetTimer()
-
-                                        if !isPictureInPictureActive {
-                                            player.isMuted.toggle()
-                                        }
-                                    } label: {
-                                        Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill", variableValue: Double(volume))
-                                            .font(.title2)
-                                            .contentTransition(.symbolEffect(.replace))
-                                            .contentShape(.circle)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                    .keyboardShortcut(.init("m"), modifiers: [])
-                                }
-                                .frame(width: 30, height: 30)
-                            }
-                            .padding(.top, 36)
-                            .padding(.trailing, 36)
-                            .opacity(isMaskShow ? 1 : 0)
-                        }
-                        .overlay(alignment: .center) {
-                            HStack(alignment: .center) {
-                                if let seasons, let season, let episode {
-                                    Button {
-                                        prevTrack(seasons, season, episode)
-                                    } label: {
-                                        Image(systemName: "backward.fill")
-                                            .font(.title2)
-                                            .contentShape(.circle)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(seasons.element(before: season) == nil && season.episodes.element(before: episode) == nil)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                    }
+                    .gesture(
+                        SpatialTapGesture(count: 2)
+                            .onEnded { event in
+                                guard player.status == .readyToPlay,
+                                      !isPictureInPictureActive
+                                else {
+                                    return
                                 }
 
-                                Spacer()
+                                if event.location.x / geometry.size.width > 0.5 {
+                                    player.seek(to: CMTime(seconds: min(currentTime + 10.0, duration), preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { complete in
+                                        if isPlaying, complete {
+                                            player.playImmediately(atRate: rate)
+                                        }
+                                    }
 
-                                if isLoading {
-                                    ProgressView()
-                                        .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                    currentTime = min(currentTime + 10.0, duration)
                                 } else {
-                                    Button {
-                                        resetTimer()
-
-                                        if !isPictureInPictureActive {
-                                            if isPlaying {
-                                                player.pause()
-                                            } else {
-                                                player.playImmediately(atRate: rate)
-                                            }
+                                    player.seek(to: CMTime(seconds: max(currentTime - 10.0, 0.0), preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { complete in
+                                        if isPlaying, complete {
+                                            player.playImmediately(atRate: rate)
                                         }
-                                    } label: {
-                                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                            .font(.largeTitle)
-                                            .contentTransition(.symbolEffect(.replace))
-                                            .contentShape(.circle)
                                     }
-                                    .buttonStyle(.plain)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                    .keyboardShortcut(.space, modifiers: [])
-                                }
 
-                                Spacer()
-
-                                if let seasons, let season, let episode {
-                                    Button {
-                                        nextTrack(seasons, season, episode)
-                                    } label: {
-                                        Image(systemName: "forward.fill")
-                                            .font(.title2)
-                                            .contentShape(.circle)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .disabled(seasons.element(after: season) == nil && season.episodes.element(after: episode) == nil)
-                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                    currentTime = max(currentTime - 10.0, 0.0)
                                 }
                             }
-                            .frame(width: 160)
-                            .opacity(isMaskShow ? 1 : 0)
-                        }
-                        .overlay(alignment: .bottom) {
-                            VStack(alignment: .center, spacing: 8) {
-                                HStack(alignment: .bottom) {
-                                    VStack(alignment: .leading) {
-                                        HStack(alignment: .center) {
-                                            if let season, let episode {
-                                                Text("key.season-\(season.name).episode-\(episode.name)")
-                                                    .font(.title2.bold())
-                                                    .lineLimit(1)
-                                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                            }
+                            .exclusively(before:
+                                TapGesture(count: 1)
+                                    .onEnded {
+                                        if !isMaskShow {
+                                            setMask(!isPictureInPictureActive)
+                                        } else {
+                                            setMask((isLoading || !isPlaying) && !isPictureInPictureActive)
+                                        }
+                                    }
+                                    .exclusively(before:
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { drag in
+                                                if drag.startLocation.x > geometry.size.width / 2 {
+                                                    let delta = -drag.translation.height / (geometry.size.height / 2)
 
-                                            Text(voiceActing.name)
+                                                    player.volume = min(max(initialVolume + Float(delta), 0), 1)
+                                                }
+                                            }
+                                            .onEnded { drag in
+                                                if drag.startLocation.x > geometry.size.width / 2 {
+                                                    initialVolume = player.volume
+                                                }
+                                            })),
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        HStack(alignment: .center) {
+                            SliderWithoutTextView(value: Binding {
+                                volume
+                            } set: { volume in
+                                player.volume = volume
+                            }, inRange: 0 ... 1, activeFillColor: .primary, fillColor: .primary.opacity(0.7), emptyColor: .primary.opacity(0.3), height: 8)
+                                .frame(width: 120, height: 10)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+
+                            VStack(alignment: .center) {
+                                Button {
+                                    resetTimer()
+
+                                    if !isPictureInPictureActive {
+                                        player.isMuted.toggle()
+                                    }
+                                } label: {
+                                    Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.3.fill", variableValue: Double(volume))
+                                        .font(.title2)
+                                        .contentTransition(.symbolEffect(.replace))
+                                        .contentShape(.circle)
+                                }
+                                .buttonStyle(.plain)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                .keyboardShortcut(.init("m"), modifiers: [])
+                            }
+                            .frame(width: 30, height: 30)
+                        }
+                        .padding(.top, 36)
+                        .padding(.trailing, 36)
+                        .opacity(isMaskShow ? 1 : 0)
+                    }
+                    .overlay(alignment: .center) {
+                        HStack(alignment: .center) {
+                            if let seasons, let season, let episode {
+                                Button {
+                                    prevTrack(seasons, season, episode)
+                                } label: {
+                                    Image(systemName: "backward.fill")
+                                        .font(.title2)
+                                        .contentShape(.circle)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(seasons.element(before: season) == nil && season.episodes.element(before: episode) == nil)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                            }
+
+                            Spacer()
+
+                            if isLoading {
+                                ProgressView()
+                                    .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                            } else {
+                                Button {
+                                    resetTimer()
+
+                                    if !isPictureInPictureActive {
+                                        if isPlaying {
+                                            player.pause()
+                                        } else {
+                                            player.playImmediately(atRate: rate)
+                                        }
+                                    }
+                                } label: {
+                                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                        .font(.largeTitle)
+                                        .contentTransition(.symbolEffect(.replace))
+                                        .contentShape(.circle)
+                                }
+                                .buttonStyle(.plain)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                .keyboardShortcut(.space, modifiers: [])
+                            }
+
+                            Spacer()
+
+                            if let seasons, let season, let episode {
+                                Button {
+                                    nextTrack(seasons, season, episode)
+                                } label: {
+                                    Image(systemName: "forward.fill")
+                                        .font(.title2)
+                                        .contentShape(.circle)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(seasons.element(after: season) == nil && season.episodes.element(after: episode) == nil)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                            }
+                        }
+                        .frame(width: 160)
+                        .opacity(isMaskShow ? 1 : 0)
+                    }
+                    .overlay(alignment: .bottom) {
+                        VStack(alignment: .center, spacing: 8) {
+                            HStack(alignment: .bottom) {
+                                VStack(alignment: .leading) {
+                                    HStack(alignment: .center) {
+                                        if let season, let episode {
+                                            Text("key.season-\(season.name).episode-\(episode.name)")
                                                 .font(.title2.bold())
-                                                .foregroundStyle(.secondary)
                                                 .lineLimit(1)
                                                 .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                                         }
 
-                                        Text(name)
-                                            .font(.largeTitle.bold())
+                                        Text(voiceActing.name)
+                                            .font(.title2.bold())
+                                            .foregroundStyle(.secondary)
                                             .lineLimit(1)
-                                            .help(name)
                                             .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                                     }
 
-                                    Spacer()
+                                    Text(name)
+                                        .font(.largeTitle.bold())
+                                        .lineLimit(1)
+                                        .help(name)
+                                        .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                }
 
-                                    HStack(alignment: .center, spacing: 12) {
-                                        if let pipController, AVPictureInPictureController.isPictureInPictureSupported() {
-                                            Button {
-                                                pipController.startPictureInPicture()
-                                            } label: {
-                                                Image(systemName: "pip.enter")
-                                                    .font(.title2)
-                                                    .contentShape(.circle)
-                                            }
-                                            .buttonStyle(.plain)
-                                            .disabled(isPictureInPictureActive || !isPictureInPicturePossible)
-                                            .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                        }
+                                Spacer()
 
-                                        if !subtitlesOptions.isEmpty {
-                                            Menu {
-                                                Picker("key.subtitles", selection: Binding {
-                                                    subtitles
-                                                } set: { subtitles in
-                                                    self.subtitles = subtitles
-
-                                                    selectSubtitles(subtitles)
-                                                }) {
-                                                    Text("key.off").tag(nil as String?)
-
-                                                    ForEach(subtitlesOptions, id: \.self) { subtitles in
-                                                        Text(subtitles.displayName(with: Locale.current)).tag(subtitles.extendedLanguageTag)
-                                                    }
-                                                }
-                                                .pickerStyle(.inline)
-                                            } label: {
-                                                Image(systemName: "captions.bubble")
-                                                    .font(.title2)
-                                                    .contentShape(.circle)
-                                            }
-                                            .buttonStyle(
-                                                OnPressButtonStyle { isPressed in
-                                                    setMask(true, force: isPressed)
-                                                },
-                                            )
-                                            .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                                        }
-
-                                        Menu {
-                                            Picker("key.timer", selection: Binding {
-                                                timer
-                                            } set: {
-                                                timer = $0
-
-                                                resetTimer()
-                                            }) {
-                                                Text("key.off").tag(nil as Int?)
-
-                                                ForEach(times, id: \.self) { time in
-                                                    let name = switch time {
-                                                    case 900:
-                                                        String(localized: "key.timer.15m")
-                                                    case 1800:
-                                                        String(localized: "key.timer.30m")
-                                                    case 2700:
-                                                        String(localized: "key.timer.45m")
-                                                    case 3600:
-                                                        String(localized: "key.timer.1h")
-                                                    case -1:
-                                                        String(localized: "key.timer.end")
-                                                    default:
-                                                        String(localized: "key.off")
-                                                    }
-
-                                                    Text(name).tag(time)
-                                                }
-                                            }
-                                            .pickerStyle(.menu)
-
-                                            if let playerLayer {
-                                                Picker("key.video_gravity", selection: Binding {
-                                                    videoGravity
-                                                } set: {
-                                                    playerLayer.videoGravity = $0
-                                                }) {
-                                                    Text("key.video_gravity.fit").tag(AVLayerVideoGravity.resizeAspect)
-
-                                                    Text("key.video_gravity.fill").tag(AVLayerVideoGravity.resizeAspectFill)
-
-                                                    Text("key.video_gravity.stretch").tag(AVLayerVideoGravity.resize)
-                                                }
-                                                .pickerStyle(.menu)
-                                            }
-
-                                            Picker("key.speed", selection: Binding {
-                                                rate
-                                            } set: { rate in
-                                                self.rate = rate
-                                                nowPlayingInfoCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = rate
-
-                                                if isPlaying {
-                                                    player.playImmediately(atRate: rate)
-                                                }
-                                            }) {
-                                                ForEach(rates, id: \.self) { value in
-                                                    Text(verbatim: "\(value)x").tag(value)
-                                                }
-                                            }
-                                            .pickerStyle(.menu)
-
-                                            if !movie.getAvailableQualities().isEmpty {
-                                                Picker("key.quality", selection: Binding {
-                                                    quality
-                                                } set: {
-                                                    quality = $0
-
-                                                    let currentSeek = player.currentTime()
-
-                                                    resetPlayer {
-                                                        setupPlayer(seek: currentSeek, isPlaying: isPlaying, subtitles: subtitles)
-                                                    }
-                                                }) {
-                                                    ForEach(movie.getAvailableQualities(), id: \.self) { value in
-                                                        Text(value).tag(value)
-                                                    }
-                                                }
-                                                .pickerStyle(.menu)
-                                            }
+                                HStack(alignment: .center, spacing: 12) {
+                                    if let pipController, AVPictureInPictureController.isPictureInPictureSupported() {
+                                        Button {
+                                            pipController.startPictureInPicture()
                                         } label: {
-                                            Image(systemName: "ellipsis.circle")
+                                            Image(systemName: "pip.enter")
                                                 .font(.title2)
                                                 .contentShape(.circle)
                                         }
-                                        .menuStyle(.button)
-                                        .menuIndicator(.hidden)
+                                        .buttonStyle(.plain)
+                                        .disabled(isPictureInPictureActive || !isPictureInPicturePossible)
+                                        .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                                    }
+
+                                    if !subtitlesOptions.isEmpty {
+                                        Menu {
+                                            Picker("key.subtitles", selection: Binding {
+                                                subtitles
+                                            } set: { subtitles in
+                                                self.subtitles = subtitles
+
+                                                selectSubtitles(subtitles)
+                                            }) {
+                                                Text("key.off").tag(nil as String?)
+
+                                                ForEach(subtitlesOptions, id: \.self) { subtitles in
+                                                    Text(subtitles.displayName(with: Locale.current)).tag(subtitles.extendedLanguageTag)
+                                                }
+                                            }
+                                            .pickerStyle(.inline)
+                                        } label: {
+                                            Image(systemName: "captions.bubble")
+                                                .font(.title2)
+                                                .contentShape(.circle)
+                                        }
                                         .buttonStyle(
                                             OnPressButtonStyle { isPressed in
                                                 setMask(true, force: isPressed)
@@ -457,70 +381,168 @@ struct PlayerView: View {
                                         )
                                         .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                                     }
-                                }
 
-                                SliderWithTextView(value: Binding {
-                                    currentTime
-                                } set: { time in
-                                    player.seek(to: CMTime(seconds: time, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { success in
-                                        if success {
-                                            updateNextTimer()
+                                    Menu {
+                                        Picker("key.timer", selection: Binding {
+                                            timer
+                                        } set: {
+                                            timer = $0
+
+                                            resetTimer()
+                                        }) {
+                                            Text("key.off").tag(nil as Int?)
+
+                                            ForEach(times, id: \.self) { time in
+                                                let name = switch time {
+                                                case 900:
+                                                    String(localized: "key.timer.15m")
+                                                case 1800:
+                                                    String(localized: "key.timer.30m")
+                                                case 2700:
+                                                    String(localized: "key.timer.45m")
+                                                case 3600:
+                                                    String(localized: "key.timer.1h")
+                                                case -1:
+                                                    String(localized: "key.timer.end")
+                                                default:
+                                                    String(localized: "key.off")
+                                                }
+
+                                                Text(name).tag(time)
+                                            }
                                         }
+                                        .pickerStyle(.menu)
+
+                                        if let playerLayer {
+                                            Picker("key.video_gravity", selection: Binding {
+                                                videoGravityMode
+                                            } set: {
+                                                videoGravityMode = $0
+                                                playerLayer.videoGravity = Self.layerVideoGravity(for: $0)
+                                            }) {
+                                                Text("key.video_gravity.fit").tag(Self.fitVideoGravityMode)
+
+                                                Text("key.video_gravity.fit_ambient").tag(Self.fitAmbientVideoGravityMode)
+
+                                                Text("key.video_gravity.fill").tag(Self.fillVideoGravityMode)
+
+                                                Text("key.video_gravity.stretch").tag(Self.stretchVideoGravityMode)
+                                            }
+                                            .pickerStyle(.menu)
+                                        }
+
+                                        Picker("key.speed", selection: Binding {
+                                            rate
+                                        } set: { rate in
+                                            self.rate = rate
+                                            nowPlayingInfoCenter.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] = rate
+
+                                            if isPlaying {
+                                                player.playImmediately(atRate: rate)
+                                            }
+                                        }) {
+                                            ForEach(rates, id: \.self) { value in
+                                                Text(verbatim: "\(value)x").tag(value)
+                                            }
+                                        }
+                                        .pickerStyle(.menu)
+
+                                        if !movie.getAvailableQualities().isEmpty {
+                                            Picker("key.quality", selection: Binding {
+                                                quality
+                                            } set: {
+                                                quality = $0
+
+                                                let currentSeek = player.currentTime()
+
+                                                resetPlayer {
+                                                    setupPlayer(seek: currentSeek, isPlaying: isPlaying, subtitles: subtitles)
+                                                }
+                                            }) {
+                                                ForEach(movie.getAvailableQualities(), id: \.self) { value in
+                                                    Text(value).tag(value)
+                                                }
+                                            }
+                                            .pickerStyle(.menu)
+                                        }
+                                    } label: {
+                                        Image(systemName: "ellipsis.circle")
+                                            .font(.title2)
+                                            .contentShape(.circle)
                                     }
-                                }, inRange: 0 ... duration, buffers: loadedTimeRanges, activeFillColor: .primary, fillColor: .primary.opacity(0.7), emptyColor: .primary.opacity(0.3), height: 8, thumbnails: thumbnails) { _ in }
-                                    .frame(height: 25)
+                                    .menuStyle(.button)
+                                    .menuIndicator(.hidden)
+                                    .buttonStyle(
+                                        OnPressButtonStyle { isPressed in
+                                            setMask(true, force: isPressed)
+                                        },
+                                    )
                                     .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
-                            }
-                            .padding(.horizontal, 36)
-                            .padding(.bottom, 36)
-                            .opacity(isMaskShow ? 1 : 0)
-                        }
-                        .overlay(alignment: .topTrailing) {
-                            if let nextTimer, let seasons, let season, let episode {
-                                Button {
-                                    nextTrack(seasons, season, episode)
-                                } label: {
-                                    HStack(alignment: .center, spacing: 21) {
-                                        VStack(alignment: .leading) {
-                                            HStack(alignment: .bottom, spacing: 7) {
-                                                Image(systemName: "waveform.circle")
-                                                    .font(.title2.bold())
-
-                                                Text("key.next")
-                                                    .font(.title2.bold())
-                                            }
-                                            .foregroundStyle(Color.accentColor)
-
-                                            Spacer(minLength: 0)
-
-                                            if let nextEpisode = season.episodes.element(after: episode) {
-                                                Text("key.season-\(season.name).episode-\(nextEpisode.name)")
-                                                    .font(.title2.bold())
-                                            } else if let nextSeason = seasons.element(after: season), let nextEpisode = nextSeason.episodes.first {
-                                                Text("key.season-\(nextSeason.name).episode-\(nextEpisode.name)")
-                                                    .font(.title2.bold())
-                                            }
-                                        }
-
-                                        Image(systemName: "play.circle")
-                                            .resizable()
-                                            .frame(width: 28, height: 28)
-                                            .background(Color.accentColor, in: .circle.inset(by: -7).rotation(.degrees(-90)).trim(from: 0.0, to: nextTimer).stroke(style: .init(lineWidth: 6, lineCap: .round, lineJoin: .round)))
-                                            .background(.ultraThickMaterial, in: .circle.inset(by: -7).rotation(.degrees(-90)).trim(from: 0.0, to: nextTimer).stroke(style: .init(lineWidth: 8, lineCap: .round, lineJoin: .round)))
-                                            .background(Color.accentColor.opacity(0.3), in: .circle.inset(by: -7).rotation(.degrees(-90)).stroke(style: .init(lineWidth: 4, lineCap: .round, lineJoin: .round)))
-                                    }
-                                    .frame(height: 50)
-                                    .padding(.vertical, 16)
-                                    .padding(.leading, 16)
-                                    .padding(.trailing, 36)
-                                    .contentShape(.rect(topLeadingRadius: 6, bottomLeadingRadius: 6))
-                                    .background(.ultraThickMaterial, in: .rect(topLeadingRadius: 6, bottomLeadingRadius: 6))
                                 }
-                                .buttonStyle(.plain)
-                                .padding(.top, 102)
-                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                             }
+
+                            SliderWithTextView(value: Binding {
+                                currentTime
+                            } set: { time in
+                                player.seek(to: CMTime(seconds: time, preferredTimescale: CMTimeScale(NSEC_PER_SEC)), toleranceBefore: .zero, toleranceAfter: .zero) { success in
+                                    if success {
+                                        updateNextTimer()
+                                    }
+                                }
+                            }, inRange: 0 ... duration, buffers: loadedTimeRanges, activeFillColor: .primary, fillColor: .primary.opacity(0.7), emptyColor: .primary.opacity(0.3), height: 8, thumbnails: thumbnails) { _ in }
+                                .frame(height: 25)
+                                .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
                         }
+                        .padding(.horizontal, 36)
+                        .padding(.bottom, 36)
+                        .opacity(isMaskShow ? 1 : 0)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        if let nextTimer, let seasons, let season, let episode {
+                            Button {
+                                nextTrack(seasons, season, episode)
+                            } label: {
+                                HStack(alignment: .center, spacing: 21) {
+                                    VStack(alignment: .leading) {
+                                        HStack(alignment: .bottom, spacing: 7) {
+                                            Image(systemName: "waveform.circle")
+                                                .font(.title2.bold())
+
+                                            Text("key.next")
+                                                .font(.title2.bold())
+                                        }
+                                        .foregroundStyle(Color.accentColor)
+
+                                        Spacer(minLength: 0)
+
+                                        if let nextEpisode = season.episodes.element(after: episode) {
+                                            Text("key.season-\(season.name).episode-\(nextEpisode.name)")
+                                                .font(.title2.bold())
+                                        } else if let nextSeason = seasons.element(after: season), let nextEpisode = nextSeason.episodes.first {
+                                            Text("key.season-\(nextSeason.name).episode-\(nextEpisode.name)")
+                                                .font(.title2.bold())
+                                        }
+                                    }
+
+                                    Image(systemName: "play.circle")
+                                        .resizable()
+                                        .frame(width: 28, height: 28)
+                                        .background(Color.accentColor, in: .circle.inset(by: -7).rotation(.degrees(-90)).trim(from: 0.0, to: nextTimer).stroke(style: .init(lineWidth: 6, lineCap: .round, lineJoin: .round)))
+                                        .background(.ultraThickMaterial, in: .circle.inset(by: -7).rotation(.degrees(-90)).trim(from: 0.0, to: nextTimer).stroke(style: .init(lineWidth: 8, lineCap: .round, lineJoin: .round)))
+                                        .background(Color.accentColor.opacity(0.3), in: .circle.inset(by: -7).rotation(.degrees(-90)).stroke(style: .init(lineWidth: 4, lineCap: .round, lineJoin: .round)))
+                                }
+                                .frame(height: 50)
+                                .padding(.vertical, 16)
+                                .padding(.leading, 16)
+                                .padding(.trailing, 36)
+                                .contentShape(.rect(topLeadingRadius: 6, bottomLeadingRadius: 6))
+                                .background(.ultraThickMaterial, in: .rect(topLeadingRadius: 6, bottomLeadingRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 102)
+                            .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+                        }
+                    }
                 }
             } else if isLoading {
                 ProgressView()
@@ -1247,5 +1269,26 @@ struct CustomVideoPlayer: UIViewRepresentable {
                 playerLayer = uiView.playerLayer
             }
         }
+    }
+}
+
+struct AmbientVideoPlayer: UIViewRepresentable {
+    private let player: AVPlayer
+
+    init(player: AVPlayer) {
+        self.player = player
+    }
+
+    func makeUIView(context _: Context) -> CustomPlayerView {
+        let view = CustomPlayerView()
+        view.player = player
+        view.playerLayer.videoGravity = .resize
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ uiView: CustomPlayerView, context _: Context) {
+        uiView.player = player
+        uiView.playerLayer.videoGravity = .resize
     }
 }
