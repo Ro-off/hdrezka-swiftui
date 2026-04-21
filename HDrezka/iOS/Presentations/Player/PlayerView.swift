@@ -120,8 +120,6 @@ struct PlayerView: View {
                             AmbientVideoPlayer(player: player)
                                 .frame(width: geometry.size.width, height: geometry.size.height)
                                 .blur(radius: 44)
-                                .scaleEffect(1.12)
-                                .overlay(Color.black.opacity(0.42))
                                 .allowsHitTesting(false)
                                 .transition(.opacity)
                         }
